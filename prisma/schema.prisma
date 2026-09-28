@@ -1,0 +1,68 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Order {
+  id            String      @id @default(uuid())
+  orderId       String      @unique // 토스 결제 연동 주문 고유 번호
+  orderName     String      // 대표 상품명
+  amount        Int         // 결제 예정 총액
+  customerName  String      // 구매자명
+  customerPhone String?     // 구매자 휴대폰
+  customerEmail String?     // 구매자 이메일
+  address       String?     // 배송지 주소
+  orderItems    OrderItem[] // 주문 상세 품목
+  status        String      @default("PENDING") // PENDING, PAID, CANCELED, FAILED
+  payment       Payment?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+model OrderItem {
+  id        String  @id @default(uuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [orderId], onDelete: Cascade)
+  productId String
+  name      String
+  modelCode String?
+  price     Int
+  quantity  Int
+  imageUrl  String?
+}
+
+model Payment {
+  id            String          @id @default(uuid())
+  paymentKey    String          @unique // 토스페이먼츠 발급 결제 키
+  orderId       String          @unique
+  order         Order           @relation(fields: [orderId], references: [orderId])
+  amount        Int             // 최초 결제 금액
+  balanceAmount Int             // 취소 후 남은 잔여 금액
+  method        String          // CARD, EASY_PAY, VIRTUAL_ACCOUNT 등
+  status        String          // DONE, CANCELED, PARTIAL_CANCELED, ABORTED
+  approvedAt    DateTime?       // 승인 일시
+  receiptUrl    String?         // 매출전표 영수증 링크
+  cancels       CancelHistory[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+}
+
+model CancelHistory {
+  id           String   @id @default(uuid())
+  paymentId    String
+  payment      Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  cancelAmount Int      // 취소된 금액
+  cancelReason String   // 취소 사유
+  canceledAt   DateTime @default(now())
+}
+
+model SystemConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
