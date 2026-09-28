@@ -31,7 +31,9 @@ function SuccessContent() {
   const [error, setError] = useState<string | null>(null);
   const [paymentData, setPaymentData] = useState<PaymentSuccessData | null>(null);
 
-  useEffect(() => {
+  const isConfirmingRef = React.useRef(false);
+
+  const confirmPayment = React.useCallback(async () => {
     if (!paymentKey || !orderId || !amountStr) {
       setError("결제 승인 파라미터(paymentKey, orderId, amount)가 올바르지 않습니다.");
       setIsLoading(false);
@@ -45,32 +47,40 @@ function SuccessContent() {
       return;
     }
 
-    // Call backend confirm endpoint
-    const confirmPayment = async () => {
-      try {
-        const res = await fetch("/api/payments/confirm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paymentKey, orderId, amount }),
-        });
+    try {
+      setIsLoading(true);
+      setError(null);
 
-        const data = await res.json();
+      const res = await fetch("/api/payments/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentKey, orderId, amount }),
+      });
 
-        if (!res.ok) {
-          throw new Error(data.error || "결제 승인 처리에 실패했습니다.");
-        }
+      const data = await res.json();
 
-        setPaymentData(data.payment);
-      } catch (err: unknown) {
-        console.error("Confirm error:", err);
-        setError((err as Error).message || "결제 승인 요청 중 오류가 발생했습니다.");
-      } finally {
-        setIsLoading(false);
+      if (!res.ok) {
+        throw new Error(data.error || "결제 승인 처리에 실패했습니다.");
       }
-    };
 
-    confirmPayment();
+      setPaymentData(data.payment);
+    } catch (err: unknown) {
+      console.error("Confirm error:", err);
+      setError((err as Error).message || "결제 승인 요청 중 오류가 발생했습니다.");
+    } finally {
+      setIsLoading(false);
+    }
   }, [paymentKey, orderId, amountStr]);
+
+  useEffect(() => {
+    if (isConfirmingRef.current) return;
+    isConfirmingRef.current = true;
+    confirmPayment();
+  }, [confirmPayment]);
+
+  const handleRetry = () => {
+    confirmPayment();
+  };
 
   if (isLoading) {
     return (
@@ -98,11 +108,18 @@ function SuccessContent() {
             {error}
           </p>
           <div className="flex flex-col gap-2">
-            <Link
-              href="/checkout"
+            <button
+              type="button"
+              onClick={handleRetry}
               className="w-full py-2.5 bg-gray-900 text-white rounded-lg font-medium text-sm hover:bg-black transition flex items-center justify-center gap-1.5"
             >
-              <RefreshCw className="w-4 h-4" /> 다시 시도하기
+              <RefreshCw className="w-4 h-4" /> 승인 상태 재확인
+            </button>
+            <Link
+              href="/checkout"
+              className="w-full py-2.5 bg-white border border-gray-300 text-gray-700 rounded-lg font-medium text-sm hover:bg-gray-50 transition"
+            >
+              새로 주문하기
             </Link>
             <Link
               href="/"

@@ -165,3 +165,30 @@ export async function cancelTossPayment(params: {
 
   return data as TossPaymentResponse;
 }
+
+export async function getTossPayment(paymentKey: string): Promise<TossPaymentResponse> {
+  const authHeader = await getTossAuthHeader();
+
+  const response = await fetch(
+    `https://api.tosspayments.com/v1/payments/${encodeURIComponent(paymentKey)}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: authHeader,
+      },
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const errorMsg = data.message || "토스 결제 조회 요청 중 오류가 발생했습니다.";
+    const errorCode = data.code || "PAYMENT_GET_FAILED";
+    const error = new Error(`[${errorCode}] ${errorMsg}`);
+    (error as unknown as { status: number; code: string }).status = response.status;
+    (error as unknown as { status: number; code: string }).code = errorCode;
+    throw error;
+  }
+
+  return data as TossPaymentResponse;
+}

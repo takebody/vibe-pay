@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { confirmTossPayment } from "@/lib/toss";
+import { confirmTossPayment, getTossPayment, TossPaymentResponse } from "@/lib/toss";
 
 export async function POST(req: Request) {
   try {
@@ -14,7 +14,28 @@ export async function POST(req: Request) {
       );
     }
 
-    // 1. Validate against DB Order record (Prevent amount tampering)
+    // 1. Idempotency Check: If payment is already approved and recorded in DB, return success
+    const existingPayment = await prisma.payment.findUnique({
+      where: { paymentKey },
+      include: {
+        order: {
+          include: {
+            orderItems: true,
+          },
+        },
+      },
+    });
+
+    if (existingPayment && (existingPayment.status === "DONE" || existingPayment.status === "PAID")) {
+      return NextResponse.json({
+        success: true,
+        order: existingPayment.order,
+        payment: existingPayment,
+        alreadyProcessed: true,
+      });
+    }
+
+    // 2. Validate against DB Order record (Prevent amount tampering)
     const existingOrder = await prisma.order.findUnique({
       where: { orderId },
     });
@@ -38,12 +59,64 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2. Call Toss Payments Confirm API (Server to Server with Basic Auth)
-    const tossResult = await confirmTossPayment({
-      paymentKey,
-      orderId,
-      amount,
-    });
+    // 3. Call Toss Payments Confirm API (with concurrency / ALREADY_PROCESSING_REQUEST tolerance)
+    let tossResult: TossPaymentResponse;
+
+    try {
+      tossResult = await confirmTossPayment({
+        paymentKey,
+        orderId,
+        amount,
+      });
+    } catch (confirmError: unknown) {
+      const code = (confirmError as { code?: string }).code || "";
+      const msg = (confirmError as Error).message || "";
+
+      // If Toss Payments reports already processing or already approved, handle gracefully
+      if (
+        code === "ALREADY_PROCESSING_REQUEST" ||
+        code === "ALREADY_APPROVED_PAYMENT" ||
+        msg.includes("ALREADY_")
+      ) {
+        console.warn(`Toss payment ${paymentKey} is already processing or approved. Resolving status...`);
+
+        // Wait briefly (1.5s) for any concurrent in-flight approval to finalize
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+
+        // Re-check DB in case concurrent request completed
+        const paymentAfterWait = await prisma.payment.findUnique({
+          where: { paymentKey },
+          include: {
+            order: {
+              include: {
+                orderItems: true,
+              },
+            },
+          },
+        });
+
+        if (paymentAfterWait && paymentAfterWait.status === "DONE") {
+          return NextResponse.json({
+            success: true,
+            order: paymentAfterWait.order,
+            payment: paymentAfterWait,
+            alreadyProcessed: true,
+          });
+        }
+
+        // Query Toss Payments GET API directly
+        try {
+          tossResult = await getTossPayment(paymentKey);
+          if (tossResult.status !== "DONE") {
+            throw confirmError;
+          }
+        } catch {
+          throw confirmError;
+        }
+      } else {
+        throw confirmError;
+      }
+    }
 
     const approvedAt = tossResult.approvedAt
       ? new Date(tossResult.approvedAt)
@@ -53,7 +126,7 @@ export async function POST(req: Request) {
     const method = tossResult.method || "CARD";
     const status = tossResult.status || "DONE";
 
-    // 3. Update Order and upsert Payment in DB
+    // 4. Update Order and upsert Payment in DB
     const [updatedOrder, payment] = await prisma.$transaction([
       prisma.order.update({
         where: { orderId },
